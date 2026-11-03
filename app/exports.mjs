@@ -1,0 +1,22 @@
+import {SOURCES} from './catalog.mjs';
+const NOTICE='Focused FHIR R4 checks and local quality rules. Not full FHIR/profile validation, de-identification, or clinical decision support. No imported values are included; structural findings can still be sensitive.';
+export const reportJSON=analysis=>JSON.stringify({...analysis,reportNotice:NOTICE},null,2)+'\n';
+const csvCell=value=>'"'+String(value??'').replace(/^[=+@\-\t\r]/,"'$&").replaceAll('"','""')+'"';
+export function findingsCSV(analysis){
+  const columns=['finding','severity','rule','category','basis','resource_alias','resource_type','path','related_aliases','title','message','action'];
+  const rows=analysis.findings.map(f=>[f.id,f.severity,f.rule,f.category,f.basis,f.resource,f.resourceType,f.path,f.related.join(' '),f.title,f.message,f.action]);
+  // Include a fixed summary row so an empty/truncated result is not mistaken for a complete pass.
+  rows.unshift(['summary','information','','coverage','Coverage limit','','','', '',analysis.truncated?'Review truncated':'Review scope',NOTICE,'Review JSON/HTML for counts, policy and scope.']);
+  return [columns,...rows].map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';
+}
+export function operationOutcome(analysis){
+  const issue=analysis.findings.map(f=>({severity:f.severity,code:f.code,details:{coding:[{system:'urn:fhir-quality-lab:rules',code:f.rule}],text:f.title},diagnostics:`${f.resource} · ${f.path}. ${f.message} ${f.action}`,expression:[f.expression]}));
+  issue.unshift({severity:'information',code:'informational',details:{text:NOTICE},diagnostics:`Ruleset ${analysis.ruleset}; review date ${analysis.reviewDate} (UTC); ${analysis.resources.length} resource aliases. Local policy: completeness=${analysis.policy.completeness}, consistency=${analysis.policy.consistency}, chronology=${analysis.policy.chronology}.`});
+  if(analysis.truncated)issue.push({severity:'warning',code:'incomplete',details:{text:'The local finding limit was reached. This report is incomplete.'}});
+  return {resourceType:'OperationOutcome',issue};
+}
+const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export function reportHTML(analysis){
+  const rows=analysis.findings.map(f=>`<article><p class="label">${escape(f.severity)} · ${escape(f.rule)} · ${escape(f.resource)}</p><h2>${escape(f.title)}</h2><p class="path">${escape(f.path)}</p><p>${escape(f.message)}</p><p><strong>Review action:</strong> ${escape(f.action)}</p><p class="meta">${escape(f.basis)} · ${escape(SOURCES[f.source]?.title||'FHIR R4')}</p></article>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>FHIR quality review</title><style>body{font:16px/1.6 system-ui,sans-serif;background:#f5f5ef;color:#193d34;margin:0}main{max-width:960px;margin:auto;padding:48px 24px}h1{font-size:36px;line-height:1.15}h2{font-size:20px}.label{text-transform:uppercase;letter-spacing:.1em;font-size:12px;font-weight:700}.notice,article{background:white;border:1px solid #d6dfd7;padding:20px;margin:20px 0;border-radius:12px}.path{overflow-wrap:anywhere;font-family:monospace}.meta{font-size:13px;color:#52665e}article{break-inside:avoid}@media print{body{background:white}main{padding:0}.notice,article{border-radius:0}}</style></head><body><main><p class="label">FHIR Clinical Data Quality Lab</p><h1>Value-free quality review</h1><p>${escape(analysis.ruleset)} · Review date ${escape(analysis.reviewDate)} (UTC)</p><div class="notice"><strong>Scope and handling</strong><p>${escape(NOTICE)}</p>${analysis.truncated?'<p><strong>Finding limit reached: review is incomplete.</strong></p>':''}</div><p><strong>${analysis.resources.length}</strong> resources · <strong>${analysis.counts.error}</strong> errors · <strong>${analysis.counts.warning}</strong> warnings · <strong>${analysis.counts.information}</strong> information</p><p class="meta">Local policy: completeness ${analysis.policy.completeness?'on':'off'} · consistency ${analysis.policy.consistency?'on':'off'} · chronology ${analysis.policy.chronology?'on':'off'}. Selected structural checks always run.</p>${rows||'<article><h2>No findings from enabled checks</h2><p>This does not establish FHIR conformance or clinical correctness.</p></article>'}</main></body></html>`;
+}
